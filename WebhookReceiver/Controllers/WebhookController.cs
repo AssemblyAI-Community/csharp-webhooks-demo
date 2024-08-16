@@ -1,70 +1,38 @@
 using Microsoft.AspNetCore.Mvc;
-using System.Net.Http;
-using System.Text.Json;
-using System.Threading.Tasks;
-using System.Text.Json.Serialization;
+using AssemblyAI;
+using AssemblyAI.Transcripts;
 
 [Route("api/[controller]")]
 [ApiController]
-public class WebhookController : ControllerBase
+public class WebhookController(AssemblyAIClient client, ILogger<WebhookController> logger) : ControllerBase
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-
-    public WebhookController(IHttpClientFactory httpClientFactory)
-    {
-        _httpClientFactory = httpClientFactory;
-    }
-
     [HttpPost]
-    public async Task<IActionResult> Post([FromBody] WebhookPayload payload)
+    public async Task<IActionResult> Post([FromBody] TranscriptReadyNotification transcriptNotification)
     {
-        if (payload.Status == "completed")
+        var transcript = await client.Transcripts.GetAsync(transcriptNotification.TranscriptId);
+        switch (transcriptNotification.Status)
         {
-            var transcriptText = await GetTranscriptText(payload.TranscriptId);
-            System.IO.File.WriteAllText($"{payload.TranscriptId}.txt", transcriptText);
-            return Ok();
+            case TranscriptReadyStatus.Error:
+                logger.LogWarning(
+                    """
+                    Transcription error
+                    - ID: {TranscriptId}
+                    - Error: {transcript.Error}
+                    """,
+                    transcript.Id,
+                    transcript.Error
+                );
+                return Ok();
+            case TranscriptReadyStatus.Completed:
+            {
+                await System.IO.File.WriteAllTextAsync(
+                    $"transcripts/{transcript.Id}.txt", 
+                    transcript.Text
+                );
+                return Ok();
+            }
+            default:
+                return BadRequest("Invalid status");
         }
-        else if (payload.Status == "error")
-        {
-            System.Console.WriteLine("Transcription error");
-            return StatusCode(500, "Transcription error");
-        }
-
-        return BadRequest("Invalid status");
     }
-
-    private async Task<string> GetTranscriptText(string transcriptId)
-    {
-        var client = _httpClientFactory.CreateClient();
-        client.DefaultRequestHeaders.Add("authorization", "API_KEY_HERE");
-
-        var response = await client.GetAsync($"https://api.assemblyai.com/v2/transcript/{transcriptId}");
-        response.EnsureSuccessStatusCode();
-
-        var jsonResponse = await response.Content.ReadAsStringAsync();
-        var transcriptResponse = JsonSerializer.Deserialize<TranscriptResponse>(jsonResponse);
-
-        return transcriptResponse.Text;
-    }
-
-    public class TranscriptResponse
-    {
-        [JsonPropertyName("id")]
-        public string Id { get; set; }
-
-        [JsonPropertyName("status")]
-        public string Status { get; set; }
-
-        [JsonPropertyName("text")]
-        public string Text { get; set; }
-    }
-}
-
-public class WebhookPayload
-{
-    [JsonPropertyName("status")]
-    public string Status { get; set; }
-
-    [JsonPropertyName("transcript_id")]
-    public string TranscriptId { get; set; }
 }
